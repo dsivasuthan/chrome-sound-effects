@@ -3,12 +3,11 @@
 // found in the LICENSE file.
 
 /*
- * Background page for Chrome Sounds extension.
- * This tracks various events from Chrome and plays sounds.
+ * Background Service Worker for Chrome Sounds extension.
+ * This tracks various events from Chrome and sends messages to the popup for audio playback.
  */
 
 // Map of hostname suffixes or URLs without query params to sounds.
-// Yeah OK, some of these are a little cliche...
 var urlSounds = {
   "http://www.google.ca/": "canadian-hello.mp3",
   "about:histograms": "time-passing.mp3",
@@ -25,7 +24,6 @@ var urlSounds = {
 };
 
 // Map of query parameter words to sounds.
-// More easy cliches...
 var searchSounds = {
   "scotland": "bagpipe.mp3",
   "seattle": "rain.mp3",
@@ -42,9 +40,7 @@ var tabNoteSounds = {
   "tab6": "mando-7.mp3",
 };
 
-// Map of sounds that play in a continuous loop while an event is happening
-// in the content area (e.g. "keypress" while start and keep looping while
-// the user keeps typing).
+// Map of sounds that play in a continuous loop
 var contentSounds = {
   "keypress": "typewriter-1.mp3",
   "resize": "harp-transition-2.mp3",
@@ -69,31 +65,12 @@ var eventSounds = {
   "startup": "whoosh-19.mp3"
 };
 
-var soundLists = [urlSounds, searchSounds, eventSounds, tabNoteSounds,
-    contentSounds];
+var soundLists = [urlSounds, searchSounds, eventSounds, tabNoteSounds, contentSounds];
 
-var sounds = {};
+// Base URL for sounds (temporary, will be replaced with custom sounds)
+var base_url = "http://dl.google.com/dl/chrome/extensions/audio/";
 
-// Map of event names to extension events.
-// Events intentionally skipped:
-// chrome.windows.onRemoved - can't suppress the tab removed that comes first
-var events = {
-  "tabCreated": chrome.tabs.onCreated,
-  "tabMoved": chrome.tabs.onMoved,
-  "tabRemoved": chrome.tabs.onRemoved,
-  "tabSelectionChanged": chrome.tabs.onSelectionChanged,
-  "tabAttached": chrome.tabs.onAttached,
-  "tabDetached": chrome.tabs.onDetached,
-  "tabNavigated": chrome.tabs.onUpdated,
-  "windowCreated": chrome.windows.onCreated,
-  "windowFocusChanged": chrome.windows.onFocusChanged,
-  "bookmarkCreated": chrome.bookmarks.onCreated,
-  "bookmarkMoved": chrome.bookmarks.onMoved,
-  "bookmarkRemoved": chrome.bookmarks.onRemoved
-};
-
-// Map of event name to a validation function that is should return true if
-// the default sound should be played for this event.
+// Map of event name to a validation function
 var eventValidator = {
   "tabCreated": tabCreated,
   "tabNavigated": tabNavigated,
@@ -103,138 +80,223 @@ var eventValidator = {
   "windowFocusChanged": windowFocusChanged,
 };
 
-var started = false;
-
-function shouldPlay(id) {
-  // Ignore all events until the startup sound has finished.
-  if (id != "startup" && !started)
-    return false;
-  var val = localStorage.getItem(id);
-  if (val && val != "enabled") {
-    console.log(id + " disabled");
-    return false;
+// Function to check if a sound should play
+function shouldPlay(id, callback) {
+  function checkEnabled(items) {
+    var val = items[id];
+    if (val && val != "enabled") {
+      console.log(id + " disabled");
+      if (callback) callback(false);
+      return;
+    }
+    if (callback) callback(true);
   }
-  return true;
-}
 
-function didPlay(id) {
-  if (!localStorage.getItem(id))
-    localStorage.setItem(id, "enabled");
-}
-
-function playSound(id, loop) {
-  if (!shouldPlay(id))
+  if (id === "startup") {
+    chrome.storage.local.get([id], checkEnabled);
     return;
+  }
 
-  var sound = sounds[id];
-  console.log("playsound: " + id);
-  if (sound && sound.src) {
-    if (!sound.paused) {
-      if (sound.currentTime < 0.2) {
-        console.log("ignoring fast replay: " + id + "/" + sound.currentTime);
+  // Persisted in session storage so sounds keep working after SW restarts (MV3).
+  chrome.storage.session.get(["started"], function(session) {
+    if (!session.started) {
+      if (callback) callback(false);
+      return;
+    }
+    chrome.storage.local.get([id], checkEnabled);
+  });
+}
+
+// Function to mark a sound as played
+function didPlay(id) {
+  chrome.storage.local.get([id], function(items) {
+    if (!items[id]) {
+      chrome.storage.local.set({ [id]: "enabled" });
+    }
+  });
+}
+
+// Promise used to serialize concurrent offscreen-document creation attempts.
+let creatingOffscreenDocument = null;
+
+// Ensure the offscreen document exists before sending audio messages.
+async function createOffscreenDocument() {
+  if (!creatingOffscreenDocument) {
+    creatingOffscreenDocument = (async () => {
+      const offscreenUrl = chrome.runtime.getURL('offscreen.html');
+      const existingContexts = await chrome.runtime.getContexts({
+        contextTypes: ['OFFSCREEN_DOCUMENT'],
+        documentUrls: [offscreenUrl]
+      });
+
+      if (existingContexts.length > 0) {
         return;
       }
-      sound.pause();
-      sound.currentTime = 0;
-    }
-    if (loop)
-      sound.loop = loop;
 
-    // Sometimes, when playing multiple times, readyState is HAVE_METADATA.
-    if (sound.readyState == 0) {  // HAVE_NOTHING
-      console.log("bad ready state: " + sound.readyState);
-    } else if (sound.error) {
-      console.log("media error: " + sound.error);
-    } else {
-      didPlay(id);
-      sound.play();
-    }
-  } else {
-    console.log("bad playSound: " + id);
+      await chrome.offscreen.createDocument({
+        url: 'offscreen.html',
+        reasons: ['AUDIO_PLAYBACK'],
+        justification: 'Playing sound effects for browser events'
+      });
+      console.log("Offscreen document created");
+    })();
+  }
+
+  try {
+    await creatingOffscreenDocument;
+  } catch (error) {
+    console.error("Error creating offscreen document:", error);
+    throw error;
+  } finally {
+    creatingOffscreenDocument = null;
   }
 }
 
+// Function to send a message to the offscreen document
+async function sendToOffscreen(message) {
+  try {
+    await createOffscreenDocument();
+    await chrome.runtime.sendMessage({ ...message, target: "offscreen" });
+  } catch (e) {
+    console.log("Error sending message to offscreen:", e);
+  }
+}
+
+// Function to play a sound
+function playSound(id, loop) {
+  shouldPlay(id, function(canPlay) {
+    if (!canPlay) return;
+
+    const soundUrl = getSoundUrl(id);
+    
+    if (soundUrl) {
+      sendToOffscreen({ 
+        action: "playSound", 
+        id: id, 
+        url: soundUrl,
+        loop: loop || false 
+      });
+    }
+    didPlay(id);
+  });
+}
+
+// Preview requests from the options page intentionally bypass the enabled
+// state, so clicking a sound always lets the user hear what it is.
+function previewSound(id) {
+  const soundUrl = getSoundUrl(id);
+  if (soundUrl) {
+    sendToOffscreen({
+      action: "playSound",
+      id: id,
+      url: soundUrl,
+      loop: false
+    });
+  }
+}
+
+// Function to stop a sound
 function stopSound(id) {
-  console.log("stopSound: " + id);
-  var sound = sounds[id];
-  if (sound && sound.src && !sound.paused) {
-    sound.pause();
-    sound.currentTime = 0;
+  sendToOffscreen({ action: "stopSound", id: id });
+}
+
+// Function to get the sound file for an ID
+function getSoundFile(id) {
+  for (var i = 0; i < soundLists.length; i++) {
+    var list = soundLists[i];
+    if (list[id]) {
+      return list[id];
+    }
+  }
+  return "";
+}
+
+function getSoundUrl(id) {
+  const soundFile = getSoundFile(id);
+  return soundFile ? base_url + soundFile : "";
+}
+
+// Pending synthetic events to suppress after Chrome creates/removes tabs or
+// windows. Groups expire so a missing browser event cannot suppress a later,
+// unrelated user action.
+var eventSuppressions = [];
+var selectedTabId = -1;
+var selectedWindowId = -1;
+var navSound = null;
+
+// Restore transient coordination state when the service worker wakes up.
+const runtimeStateReady = (async () => {
+  try {
+    const state = await chrome.storage.session.get([
+      "eventSuppressions",
+      "selectedTabId",
+      "selectedWindowId",
+      "navSound"
+    ]);
+    eventSuppressions = Array.isArray(state.eventSuppressions)
+      ? state.eventSuppressions
+      : [];
+    selectedTabId = state.selectedTabId ?? -1;
+    selectedWindowId = state.selectedWindowId ?? -1;
+    navSound = state.navSound || null;
+  } catch (error) {
+    console.error("Error restoring runtime state:", error);
+  }
+})();
+
+async function persistRuntimeState() {
+  try {
+    await chrome.storage.session.set({
+      eventSuppressions,
+      selectedTabId,
+      selectedWindowId,
+      navSound
+    });
+  } catch (error) {
+    console.error("Error persisting runtime state:", error);
   }
 }
 
-var base_url = "http://dl.google.com/dl/chrome/extensions/audio/";
-
-function soundLoadError(audio, id) {
-  console.log("failed to load sound: " + id + "-" + audio.src);
-  audio.src = "";
-  if (id == "startup")
-    started = true;
+function suppressNext(eventNames) {
+  eventSuppressions.push({
+    eventNames,
+    createdAt: Date.now()
+  });
+  persistRuntimeState();
 }
-
-function soundLoaded(audio, id) {
-  console.log("loaded sound: " + id);
-  sounds[id] = audio;
-  if (id == "startup")
-    playSound(id);
-}
-
-// Hack to keep a reference to the objects while we're waiting for them to load.
-var notYetLoaded = {};
-
-function loadSound(file, id) {
-  if (!file.length) {
-    console.log("no sound for " + id);
-    return;
-  }
-  var audio = new Audio();
-  audio.id = id;
-  audio.onerror = function() { soundLoadError(audio, id); };
-  audio.addEventListener("canplaythrough",
-      function() { soundLoaded(audio, id); }, false);
-  if (id == "startup") {
-    audio.addEventListener("ended", function() { started = true; });
-  }
-  audio.src = base_url + file;
-  audio.load();
-  notYetLoaded[id] = audio;
-}
-
-// Remember the last event so that we can avoid multiple events firing
-// unnecessarily (e.g. selection changed due to close).
-var eventsToEat = 0;
 
 function eatEvent(name) {
-  if (eventsToEat > 0) {
-    console.log("ate event: " + name);
-    eventsToEat--;
-    return true;
+  const now = Date.now();
+  eventSuppressions = eventSuppressions.filter(
+    (group) => now - group.createdAt < 2000
+  );
+  const groupIndex = eventSuppressions.findIndex(
+    (group) => group.eventNames.includes(name)
+  );
+  if (groupIndex === -1) {
+    return false;
   }
-  return false;
+  eventSuppressions.splice(groupIndex, 1);
+  console.log("Ate event: " + name);
+  persistRuntimeState();
+  return true;
 }
 
 function soundEvent(event, name) {
   if (event) {
     var validator = eventValidator[name];
     if (validator) {
-      event.addListener(function() {
-        console.log("handling custom event: " + name);
-
-        // Check this first since the validator may bump the count for future
-        // events.
-        var canPlay = (eventsToEat == 0);
+      event.addListener(async function() {
+        await runtimeStateReady;
+        console.log("Handling custom event: " + name);
         if (validator.apply(this, arguments)) {
-          if (!canPlay) {
-            console.log("ate event: " + name);
-            eventsToEat--;
-            return;
-          }
           playSound(name);
         }
       });
     } else {
-      event.addListener(function() {
-        console.log("handling event: " + name);
+      event.addListener(async function() {
+        await runtimeStateReady;
+        console.log("Handling event: " + name);
         if (eatEvent(name)) {
           return;
         }
@@ -242,45 +304,42 @@ function soundEvent(event, name) {
       });
     }
   } else {
-    console.log("no event for " + name);
+    console.log("No event for " + name);
   }
 }
-
-var navSound;
 
 function stopNavSound() {
   if (navSound) {
     stopSound(navSound);
     navSound = null;
+    persistRuntimeState();
   }
 }
 
 function playNavSound(id) {
   stopNavSound();
   navSound = id;
+  persistRuntimeState();
   playSound(id);
 }
 
 function tabNavigated(tabId, changeInfo, tab) {
-  // Quick fix to catch the case where the content script doesn't have a chance
-  // to stop itself.
   stopSound("keypress");
-
-  //console.log(JSON.stringify(changeInfo) + JSON.stringify(tab));
   if (changeInfo.status != "complete") {
+    return false;
+  }
+  if (!tab || typeof tab.url !== "string") {
+    console.warn("Tab navigation completed without a usable URL:", tabId);
     return false;
   }
   if (eatEvent("tabNavigated")) {
     return false;
   }
-
-  console.log(JSON.stringify(tab));
-
-  if (navSound)
-    stopSound(navSound);
-
+  console.log("Tab navigated to: " + tab.url);
+  stopNavSound();
+  
   var re = /https?:\/\/([^\/:]*)[^\?]*\??(.*)/i;
-  match = re.exec(tab.url);
+  var match = re.exec(tab.url);
   if (match) {
     if (match.length == 3) {
       var query = match[2];
@@ -289,11 +348,11 @@ function tabNavigated(tabId, changeInfo, tab) {
         if (parts[i].indexOf("q=") == 0) {
           var q = decodeURIComponent(parts[i].substring(2));
           q = q.replace("+", " ");
-          console.log("query == " + q);
+          console.log("Query: " + q);
           var words = q.split(" ");
-          for (j in words) {
+          for (var j in words) {
             if (searchSounds[words[j]]) {
-              console.log("searchSound: " + words[j]);
+              console.log("Search sound: " + words[j]);
               playNavSound(words[j]);
               return false;
             }
@@ -323,32 +382,34 @@ function tabNavigated(tabId, changeInfo, tab) {
       }
     }
   }
-
-  // Now try a direct URL match (without query string).
   var url = tab.url;
   var query = url.indexOf("?");
   if (query > 0) {
     url = tab.url.substring(0, query);
   }
-  console.log(tab.url);
+  console.log("Checking URL: " + url);
   var sound = urlSounds[url];
   if (sound) {
     playNavSound(url);
     return false;
   }
-
   return true;
 }
 
-var selectedTabId = -1;
-
-function tabSelectionChanged(tabId) {
+function tabSelectionChanged(activeInfo) {
+  stopSound("keypress");
+  var tabId = activeInfo.tabId;
   selectedTabId = tabId;
+  persistRuntimeState();
   if (eatEvent("tabSelectionChanged"))
     return false;
-
+  
   var count = 7;
   chrome.tabs.get(tabId, function(tab) {
+    if (chrome.runtime.lastError || !tab) {
+      console.warn("Unable to read activated tab:", tabId);
+      return;
+    }
     var index = tab.index % count;
     playSound("tab" + index);
   });
@@ -359,9 +420,7 @@ function tabCreated(tab) {
   if (eatEvent("tabCreated")) {
     return false;
   }
-  eventsToEat++;  // tabNavigated or tabSelectionChanged
-  // TODO - unfortunately, we can't detect whether this tab will get focus, so
-  // we can't decide whether or not to eat a second event.
+  suppressNext(["tabNavigated", "tabSelectionChanged"]);
   return true;
 }
 
@@ -370,7 +429,7 @@ function tabRemoved(tabId) {
     return false;
   }
   if (tabId == selectedTabId) {
-    eventsToEat++;  // tabSelectionChanged
+    suppressNext(["tabSelectionChanged"]);
     stopNavSound();
   }
   return true;
@@ -380,7 +439,9 @@ function windowCreated(window) {
   if (eatEvent("windowCreated")) {
     return false;
   }
-  eventsToEat += 3;  // tabNavigated, tabSelectionChanged, windowFocusChanged
+  suppressNext(["tabNavigated"]);
+  suppressNext(["tabSelectionChanged"]);
+  suppressNext(["windowFocusChanged"]);
   if (window.incognito) {
     playSound("windowCreatedIncognito");
     return false;
@@ -388,44 +449,74 @@ function windowCreated(window) {
   return true;
 }
 
-var selectedWindowId = -1;
-
 function windowFocusChanged(windowId) {
+  stopSound("keypress");
   if (windowId == selectedWindowId) {
     return false;
   }
   selectedWindowId = windowId;
+  persistRuntimeState();
   if (eatEvent("windowFocusChanged")) {
     return false;
   }
   return true;
 }
 
-function contentScriptHandler(request) {
-  if (contentSounds[request.eventName]) {
-    if (request.eventValue == "started") {
-      playSound(request.eventName, true);
-    } else if (request.eventValue == "stopped") {
-      stopSound(request.eventName);
+// Register event listeners
+console.log("Registering event listeners...");
+// Register each event manually to avoid prototype issues
+soundEvent(chrome.tabs.onCreated, "tabCreated");
+soundEvent(chrome.tabs.onMoved, "tabMoved");
+soundEvent(chrome.tabs.onRemoved, "tabRemoved");
+soundEvent(chrome.tabs.onActivated, "tabSelectionChanged");
+soundEvent(chrome.tabs.onAttached, "tabAttached");
+soundEvent(chrome.tabs.onDetached, "tabDetached");
+soundEvent(chrome.tabs.onUpdated, "tabNavigated");
+soundEvent(chrome.windows.onCreated, "windowCreated");
+soundEvent(chrome.windows.onFocusChanged, "windowFocusChanged");
+soundEvent(chrome.bookmarks.onCreated, "bookmarkCreated");
+soundEvent(chrome.bookmarks.onMoved, "bookmarkMoved");
+soundEvent(chrome.bookmarks.onRemoved, "bookmarkRemoved");
+console.log("All event listeners registered");
+
+async function markExtensionStarted() {
+  await chrome.storage.session.set({ started: true });
+  await createOffscreenDocument();
+  playSound("startup");
+}
+
+// Create the offscreen document when the browser starts
+chrome.runtime.onStartup.addListener(() => {
+  markExtensionStarted();
+});
+
+// Also when the extension is installed or reloaded
+chrome.runtime.onInstalled.addListener(() => {
+  markExtensionStarted();
+});
+
+// Listen for messages from content scripts
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  console.log("Received message in background:", request);
+  if (request.action === "previewSound" && request.id) {
+    previewSound(request.id);
+    return;
+  }
+  if (request.eventName) {
+    console.log("Event name:", request.eventName, "Value:", request.eventValue);
+    // Handle messages from content scripts
+    if (contentSounds[request.eventName]) {
+      console.log("Playing content sound:", request.eventName);
+      if (request.eventValue === "started") {
+        playSound(request.eventName, true);
+      } else if (request.eventValue === "stopped") {
+        stopSound(request.eventName);
+      } else {
+        // Play once if no value or value is empty
+        playSound(request.eventName, false);
+      }
     } else {
-      playSound(request.eventName);
+      console.log("No sound defined for event:", request.eventName);
     }
   }
-  console.log("got message: " + JSON.stringify(request));
-}
-
-
-//////////////////////////////////////////////////////
-
-// Listen for messages from content scripts.
-chrome.extension.onRequest.addListener(contentScriptHandler);
-
-// Load the sounds and register event listeners.
-for (var list in soundLists) {
-  for (var id in soundLists[list]) {
-    loadSound(soundLists[list][id], id);
-  }
-}
-for (var name in events) {
-  soundEvent(events[name], name);
-}
+});
