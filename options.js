@@ -122,8 +122,16 @@ function safeSendMessage(message) {
 var currentPreviewId = null;
 var currentPreviewBtn = null;
 var previewTimeout = null;
+var previewAudio = null;
 
 function stopCurrentPreview() {
+  if (previewAudio) {
+    try {
+      previewAudio.pause();
+      previewAudio.currentTime = 0;
+    } catch (e) {}
+    previewAudio = null;
+  }
   if (currentPreviewId) {
     safeSendMessage({ type: "optionsStop", id: currentPreviewId });
     if (currentPreviewBtn) {
@@ -139,7 +147,7 @@ function stopCurrentPreview() {
   }
 }
 
-function previewSound(id, btn) {
+function previewSound(id, btn, soundFile, customAudioUrl) {
   if (currentPreviewId === id) {
     stopCurrentPreview();
     return;
@@ -151,9 +159,40 @@ function previewSound(id, btn) {
   btn.textContent = "⏹ Stop";
   btn.classList.add("playing");
 
-  safeSendMessage({ type: "optionsPreview", id: id });
+  var audioSrc = customAudioUrl;
+  if (!audioSrc && soundFile) {
+    if (/^https?:\/\/|^data:/.test(soundFile)) {
+      audioSrc = soundFile;
+    } else {
+      audioSrc = "https://dl.google.com/dl/chrome/extensions/audio/" + soundFile;
+    }
+  }
 
-  // Fallback reset if audioEnded message is missed
+  if (audioSrc) {
+    try {
+      previewAudio = new Audio(audioSrc);
+      previewAudio.onended = function() {
+        stopCurrentPreview();
+      };
+      previewAudio.onerror = function() {
+        stopCurrentPreview();
+        showToast("Error playing preview sound");
+      };
+      var playPromise = previewAudio.play();
+      if (playPromise && playPromise.catch) {
+        playPromise.catch(function() {
+          stopCurrentPreview();
+        });
+      }
+    } catch (e) {
+      stopCurrentPreview();
+    }
+  } else {
+    // Fallback to background messaging if source is unknown
+    safeSendMessage({ type: "optionsPreview", id: id });
+  }
+
+  // Safety timer to reset preview (e.g. continuous sounds)
   previewTimeout = setTimeout(function() {
     stopCurrentPreview();
   }, 4500);
@@ -237,6 +276,9 @@ function createSoundRow(soundItem, items) {
   var actions = document.createElement("div");
   actions.className = "row-actions";
 
+  var soundFile = soundItem.defaultFile || null;
+  var customAudioUrl = items["customSound:" + key] || null;
+
   // Dedicated Play/Preview button
   var previewBtn = document.createElement("button");
   previewBtn.type = "button";
@@ -247,13 +289,14 @@ function createSoundRow(soundItem, items) {
     currentPreviewBtn = previewBtn;
   }
   previewBtn.onclick = function() {
-    previewSound(key, previewBtn);
+    previewSound(key, previewBtn, soundFile, customAudioUrl);
   };
   actions.appendChild(previewBtn);
 
   // File upload for custom audio
   var fileInput = document.createElement("input");
   fileInput.type = "file";
+  fileInput.className = "file-input";
   fileInput.accept = "audio/*";
   fileInput.title = "Upload custom sound for " + key;
   fileInput.onchange = function(e) {
@@ -275,6 +318,7 @@ function createSoundRow(soundItem, items) {
   if (isCustom) {
     var clearBtn = document.createElement("button");
     clearBtn.type = "button";
+    clearBtn.className = "btn-clear";
     clearBtn.textContent = "Clear";
     clearBtn.title = "Revert to default sound";
     clearBtn.onclick = function() {
@@ -289,7 +333,7 @@ function createSoundRow(soundItem, items) {
   if (soundItem.isCustomSite) {
     var removeBtn = document.createElement("button");
     removeBtn.type = "button";
-    removeBtn.className = "btn-danger";
+    removeBtn.className = "btn-danger btn-remove";
     removeBtn.textContent = "🗑 Remove";
     removeBtn.title = "Delete this custom site";
     removeBtn.onclick = function() {

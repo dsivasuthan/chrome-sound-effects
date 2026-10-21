@@ -2,7 +2,7 @@
 // Receives messages from the service worker to play/stop sounds.
 
 (function() {
-  var baseUrl = "";
+  var baseUrl = "https://dl.google.com/dl/chrome/extensions/audio/";
   var sounds = {};
   var mappings = {};
   var DEBUG_LOGGING = true;
@@ -30,7 +30,7 @@
     audio.id = id;
     audio.preload = "auto";
     // Accept a full data URL (for custom sounds) or a relative file
-    if (fileOrDataUrl && /^data:audio\//.test(fileOrDataUrl)) {
+    if (fileOrDataUrl && /^data:/.test(fileOrDataUrl)) {
       audio.src = fileOrDataUrl;
     } else {
       audio.src = baseUrl + fileOrDataUrl;
@@ -73,7 +73,7 @@
       }
       // If the source changed (custom uploaded), update src
       if (file && audio) {
-        if (/^data:audio\//.test(file)) {
+        if (/^data:/.test(file)) {
           if (audio.src !== file) audio.src = file;
         } else {
           var target = baseUrl + file;

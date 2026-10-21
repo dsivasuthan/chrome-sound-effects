@@ -10,9 +10,10 @@ body {
   background: #f6f8fb;
   color: #1f2937;
   font-size: 14px;
+  min-width: 740px;
 }
 #page {
-  max-width: 800px;
+  max-width: 820px;
   margin: 28px auto;
   padding: 0 16px;
 }
@@ -120,7 +121,8 @@ h1 {
 }
 .row-actions {
   margin-left: auto;
-  display: flex;
+  display: grid;
+  grid-template-columns: 84px 175px 56px 74px;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
@@ -132,13 +134,15 @@ button {
   border: 1px solid #d1d5db;
   color: #374151;
   border-radius: 6px;
-  padding: 5px 10px;
+  padding: 5px 8px;
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
   gap: 4px;
 }
 button:hover {
@@ -154,6 +158,8 @@ button.btn-primary:hover {
   background: #1d4ed8;
 }
 button.btn-danger {
+  grid-column: 4;
+  width: 74px;
   color: #b91c1c;
   border-color: #fca5a5;
   background: #fef2f2;
@@ -162,9 +168,13 @@ button.btn-danger:hover {
   background: #fee2e2;
   border-color: #f87171;
 }
+button.btn-clear {
+  grid-column: 3;
+  width: 56px;
+}
 button.btn-preview {
-  min-width: 78px;
-  justify-content: center;
+  grid-column: 1;
+  width: 84px;
   color: #2563eb;
   border-color: #bfdbfe;
   background: #eff6ff;
@@ -180,6 +190,21 @@ button.btn-preview.playing {
 }
 button.btn-preview.playing:hover {
   background: #fee2e2;
+}
+
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #2563eb;
+  flex-shrink: 0;
+}
+input[type="file"].file-input {
+  grid-column: 2;
+  width: 175px;
+  font-size: 11px;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 /* Add site box */
