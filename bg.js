@@ -166,13 +166,28 @@ function safeSendMessage(message) {
   }
 }
 
+var customSites = [];
+chrome.storage.local.get("customSites", function(items) {
+  if (items && items.customSites) {
+    customSites = items.customSites;
+    if (DEBUG_LOGGING) dlog("loaded customSites on startup:", customSites.length);
+  }
+});
+
 function resolveSoundSource(id) {
   return new Promise(function(resolve) {
-    chrome.storage.local.get("customSound:" + id, function(items) {
+    chrome.storage.local.get(["customSound:" + id, "customSites"], function(items) {
       var custom = items && items["customSound:" + id];
       if (custom) {
         resolve(custom);
         return;
+      }
+      var sites = (items && items.customSites) || customSites || [];
+      for (var i = 0; i < sites.length; i++) {
+        if (sites[i].pattern === id && sites[i].sound) {
+          resolve(sites[i].sound);
+          return;
+        }
       }
       // Search default mappings
       for (var list in soundLists) {
@@ -240,10 +255,18 @@ async function offscreenInit() {
   // Overlay any custom sounds from storage
   chrome.storage.local.get(null, function(items) {
     if (DEBUG_LOGGING) dlog("offscreenInit merging custom sounds. items count:", items ? Object.keys(items).length : 0);
-    for (var key in items) {
-      if (key.indexOf("customSound:") === 0) {
-        var soundId = key.substring("customSound:".length);
-        payload.mappings[soundId] = items[key];
+    if (items) {
+      var sites = items["customSites"] || customSites || [];
+      for (var s = 0; s < sites.length; s++) {
+        if (sites[s].pattern && sites[s].sound) {
+          payload.mappings[sites[s].pattern] = sites[s].sound;
+        }
+      }
+      for (var key in items) {
+        if (key.indexOf("customSound:") === 0) {
+          var soundId = key.substring("customSound:".length);
+          payload.mappings[soundId] = items[key];
+        }
       }
     }
     // Send init (do not reset readiness here; it can cause messages to queue indefinitely)
@@ -370,42 +393,82 @@ function tabNavigated(tabId, changeInfo, tab) {
 
   var re = /https?:\/\/([^\/:]*)[^\?]*\??(.*)/i;
   var match = re.exec(tab.url);
+  var hostname = "";
+  var searchWords = [];
+
   if (match) {
-    if (match.length == 3) {
+    if (match.length >= 2 && match[1]) {
+      hostname = match[1].toLowerCase();
+    }
+    if (match.length >= 3 && match[2]) {
       var query = match[2];
       var parts = query.split("&");
       for (var i in parts) {
         if (parts[i].indexOf("q=") == 0) {
-          var q = decodeURIComponent(parts[i].substring(2));
-          q = q.replace("+", " ");
-          var words = q.split(" ");
-          for (j in words) {
-            if (searchSounds[words[j]]) {
-              playNavSound(words[j]);
-              return false;
-            }
-          }
+          var q = decodeURIComponent(parts[i].substring(2)).replace("+", " ");
+          searchWords = q.toLowerCase().split(" ");
           break;
         }
       }
     }
-    if (match.length >= 2) {
-      var hostname = match[1];
-      if (hostname) {
-        var parts = hostname.split(".");
-        if (parts.length > 1) {
-          var tld2 = parts.slice(-2).join(".");
-          var tld3 = parts.slice(-3).join(".");
-          var sound = urlSounds[tld2];
-          if (sound) {
-            playNavSound(tld2);
-            return false;
-          }
-          sound = urlSounds[tld3];
-          if (sound) {
-            playNavSound(tld3);
-            return false;
-          }
+  }
+
+  // Check user-added custom sites / Easter eggs first
+  if (customSites && customSites.length > 0) {
+    var rawUrl = (tab.url || "").toLowerCase();
+    var cleanUrl = rawUrl;
+    var qIndex = cleanUrl.indexOf("?");
+    if (qIndex > 0) cleanUrl = cleanUrl.substring(0, qIndex);
+
+    for (var c = 0; c < customSites.length; c++) {
+      var item = customSites[c];
+      var pattern = (item.pattern || "").trim().toLowerCase();
+      if (!pattern) continue;
+
+      // 1. Search words match
+      if (searchWords.length > 0 && searchWords.indexOf(pattern) !== -1) {
+        playNavSound(item.pattern);
+        return false;
+      }
+
+      // 2. Hostname / Domain match (e.g. reddit.com matches reddit.com or www.reddit.com)
+      var cleanPattern = pattern.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+      if (hostname && (hostname === cleanPattern || hostname.endsWith("." + cleanPattern))) {
+        playNavSound(item.pattern);
+        return false;
+      }
+
+      // 3. Full URL prefix or direct match
+      if (rawUrl.startsWith(pattern) || cleanUrl === pattern) {
+        playNavSound(item.pattern);
+        return false;
+      }
+    }
+  }
+
+  if (match) {
+    if (searchWords.length > 0) {
+      for (var j in searchWords) {
+        if (searchSounds[searchWords[j]]) {
+          playNavSound(searchWords[j]);
+          return false;
+        }
+      }
+    }
+    if (hostname) {
+      var parts = hostname.split(".");
+      if (parts.length > 1) {
+        var tld2 = parts.slice(-2).join(".");
+        var tld3 = parts.slice(-3).join(".");
+        var sound = urlSounds[tld2];
+        if (sound) {
+          playNavSound(tld2);
+          return false;
+        }
+        sound = urlSounds[tld3];
+        if (sound) {
+          playNavSound(tld3);
+          return false;
         }
       }
     }
@@ -561,6 +624,11 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
 if (chrome.storage && chrome.storage.onChanged) {
   chrome.storage.onChanged.addListener(function(changes, areaName) {
     if (areaName !== "local") return;
+    if (changes["customSites"]) {
+      customSites = changes["customSites"].newValue || [];
+      if (DEBUG_LOGGING) dlog("storage changed: customSites updated, count:", customSites.length);
+      offscreenInit();
+    }
     for (var key in changes) {
       if (changes[key].newValue === "disabled") {
         if (DEBUG_LOGGING) dlog("storage changed: " + key + " disabled, stopping sound");

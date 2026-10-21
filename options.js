@@ -2,6 +2,45 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+var AVAILABLE_SOUNDS = [
+  "bell-small.mp3",
+  "bell-transition.mp3",
+  "bubble-drop.mp3",
+  "click.mp3",
+  "conga1.mp3",
+  "cricket.mp3",
+  "dialup.mp3",
+  "didgeridoo.mp3",
+  "explosion-6.mp3",
+  "harp-transition-2.mp3",
+  "mando-1.mp3",
+  "mando-2.mp3",
+  "mando-3.mp3",
+  "mando-4.mp3",
+  "mando-5.mp3",
+  "mando-6.mp3",
+  "mando-7.mp3",
+  "mind_the_gap.mp3",
+  "my_subway.mp3",
+  "news.mp3",
+  "rain.mp3",
+  "sadtrombone.mp3",
+  "shepard.mp3",
+  "smash-glass-1.mp3",
+  "sonar.mp3",
+  "sword-shrill.mp3",
+  "thud.mp3",
+  "time-passing.mp3",
+  "transform!.mp3",
+  "typewriter-1.mp3",
+  "weird-wind1.mp3",
+  "whoosh-15.mp3",
+  "whoosh-19.mp3",
+  "beepboop.mp3",
+  "bagpipe.mp3",
+  "canadian-hello.mp3"
+];
+
 var PRESET_CATEGORIES = [
   {
     title: "In-Page Interaction Sounds",
@@ -179,6 +218,13 @@ function createSoundRow(soundItem, items) {
     labelGroup.appendChild(fileSpan);
   }
 
+  if (soundItem.isCustomSite) {
+    var siteBadge = document.createElement("span");
+    siteBadge.className = "site-badge";
+    siteBadge.textContent = "Custom Site";
+    labelGroup.appendChild(siteBadge);
+  }
+
   if (isCustom) {
     var customBadge = document.createElement("span");
     customBadge.className = "custom-badge";
@@ -240,6 +286,27 @@ function createSoundRow(soundItem, items) {
     actions.appendChild(clearBtn);
   }
 
+  if (soundItem.isCustomSite) {
+    var removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "btn-danger";
+    removeBtn.textContent = "🗑 Remove";
+    removeBtn.title = "Delete this custom site";
+    removeBtn.onclick = function() {
+      chrome.storage.local.get("customSites", function(curr) {
+        var list = (curr && curr.customSites) || [];
+        list = list.filter(function(s) { return s.pattern !== key; });
+        chrome.storage.local.set({ customSites: list }, function() {
+          chrome.storage.local.remove([key, "customSound:" + key], function() {
+            showToast("Removed custom site: " + key);
+            renderCatalog();
+          });
+        });
+      });
+    };
+    actions.appendChild(removeBtn);
+  }
+
   row.appendChild(actions);
   return row;
 }
@@ -279,12 +346,83 @@ function renderCatalog() {
         card.appendChild(createSoundRow(soundItem, items));
       });
 
+      // For Browser & Easter Eggs: render user-added custom sites and the Add Site form
+      if (cat.title === "Browser & Easter Eggs") {
+        var customSitesList = items.customSites || [];
+        customSitesList.forEach(function(site) {
+          knownKeys[site.pattern] = true;
+          var siteRow = createSoundRow({
+            id: site.pattern,
+            name: site.pattern,
+            defaultFile: site.sound,
+            isCustomSite: true
+          }, items);
+          card.appendChild(siteRow);
+        });
+
+        var addSection = document.createElement("div");
+        addSection.className = "add-site-section";
+
+        var addTitle = document.createElement("div");
+        addTitle.className = "add-site-title";
+        addTitle.textContent = "+ Add New Site or Search Easter Egg";
+        addSection.appendChild(addTitle);
+
+        var form = document.createElement("div");
+        form.className = "add-site-form";
+
+        var input = document.createElement("input");
+        input.type = "text";
+        input.id = "new-site-input";
+        input.placeholder = "e.g. reddit.com, https://github.com, or search word";
+        form.appendChild(input);
+
+        var select = document.createElement("select");
+        select.id = "new-site-select";
+        AVAILABLE_SOUNDS.forEach(function(snd) {
+          var opt = document.createElement("option");
+          opt.value = snd;
+          opt.textContent = snd;
+          select.appendChild(opt);
+        });
+        form.appendChild(select);
+
+        var addBtn = document.createElement("button");
+        addBtn.type = "button";
+        addBtn.className = "btn-primary";
+        addBtn.textContent = "+ Add Site";
+        addBtn.onclick = function() {
+          var val = (input.value || "").trim();
+          if (!val) {
+            showToast("Please enter a domain or URL");
+            input.focus();
+            return;
+          }
+          if (knownKeys[val]) {
+            showToast("This site or event is already added");
+            return;
+          }
+          chrome.storage.local.get("customSites", function(curr) {
+            var list = (curr && curr.customSites) || [];
+            list.push({ pattern: val, sound: select.value });
+            chrome.storage.local.set({ customSites: list, [val]: "enabled" }, function() {
+              showToast("Added custom site: " + val);
+              renderCatalog();
+            });
+          });
+        };
+        form.appendChild(addBtn);
+
+        addSection.appendChild(form);
+        card.appendChild(addSection);
+      }
+
       container.appendChild(card);
     });
 
     // Handle any extra discovered sounds saved in storage not in presets
     var otherKeys = Object.keys(items).filter(function(k) {
-      return !knownKeys[k] && !k.startsWith("customSound:");
+      return !knownKeys[k] && !k.startsWith("customSound:") && k !== "customSites";
     });
 
     if (otherKeys.length > 0) {
