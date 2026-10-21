@@ -19,7 +19,8 @@
     "tabs",
     "bookmarks",
     "offscreen",
-    "storage"
+    "storage",
+    "scripting"
   ],
   "host_permissions": [
     "http://*/*",

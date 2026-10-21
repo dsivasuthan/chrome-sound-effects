@@ -269,7 +269,31 @@ async function playSound(id, loop) {
   }
 }
 
+var previewTimeout = null;
+async function previewSound(id) {
+  await ensureOffscreenDocument();
+  var src = await resolveSoundSource(id);
+  if (!src) return;
+  if (DEBUG_LOGGING) dlog("previewSound", id, "src=", src && (src.substring(0,5)==='data:'?'[dataURL]':src));
+  if (previewTimeout) {
+    clearTimeout(previewTimeout);
+    previewTimeout = null;
+  }
+  safeSendMessage({ type: "play", id: id, loop: false, src: src });
+  // For looping / continuous sounds, stop after 4 seconds preview safety
+  if (loopableIds[id]) {
+    previewTimeout = setTimeout(function() {
+      stopSound(id);
+      previewTimeout = null;
+    }, 4000);
+  }
+}
+
 async function stopSound(id) {
+  if (previewTimeout) {
+    clearTimeout(previewTimeout);
+    previewTimeout = null;
+  }
   await ensureOffscreenDocument();
   if (DEBUG_LOGGING) dlog("stopSound", id);
   safeSendMessage({ type: "stop", id: id });
@@ -478,8 +502,8 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
   if (!message || !message.type) return;
   if (message.type === "contentEvent") {
     contentScriptHandler(message);
-  } else if (message.type === "optionsPlay") {
-    playSound(message.id, false);
+  } else if (message.type === "optionsPreview" || message.type === "optionsPlay") {
+    previewSound(message.id);
   } else if (message.type === "optionsStop") {
     stopSound(message.id);
   } else if (message.type === "offscreenReady") {
@@ -533,16 +557,51 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
   }
 });
 
+// Listen for dynamic settings changes and immediately stop disabled sounds
+if (chrome.storage && chrome.storage.onChanged) {
+  chrome.storage.onChanged.addListener(function(changes, areaName) {
+    if (areaName !== "local") return;
+    for (var key in changes) {
+      if (changes[key].newValue === "disabled") {
+        if (DEBUG_LOGGING) dlog("storage changed: " + key + " disabled, stopping sound");
+        stopSound(key);
+      }
+    }
+  });
+}
+
 // Register event listeners
 for (var name in events) {
   soundEvent(events[name], name);
   if (DEBUG_LOGGING) dlog("registered listener for", name);
 }
 
+// Inject content scripts into already-open tabs on install or update
+async function injectContentScriptsIntoExistingTabs() {
+  if (!chrome.scripting || !chrome.tabs) return;
+  try {
+    var tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
+    for (var i = 0; i < tabs.length; i++) {
+      var tab = tabs[i];
+      if (tab.id && tab.url && !tab.url.startsWith("chrome://") && !tab.url.startsWith("chrome-extension://") && !tab.url.startsWith("edge://")) {
+        chrome.scripting.executeScript({
+          target: { tabId: tab.id, allFrames: true },
+          files: ["content.js"]
+        }).catch(function(err) {
+          // Tab may be discarded, restricted, or closing; ignore
+        });
+      }
+    }
+  } catch (e) {
+    if (DEBUG_LOGGING) dlog("Error injecting content scripts:", e);
+  }
+}
+
 // Initialize offscreen and play startup sound on worker start
 if (chrome.runtime && chrome.runtime.onInstalled) {
   chrome.runtime.onInstalled.addListener(function(details) {
     if (DEBUG_LOGGING) dlog("onInstalled", details && details.reason);
+    injectContentScriptsIntoExistingTabs();
   });
 }
 if (chrome.runtime && chrome.runtime.onStartup) {
