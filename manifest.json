@@ -1,6 +1,6 @@
 {
   "name": "Chrome Sound Effects",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Add sounds to events triggered by user in Chrome, like switching tabs, etc. They can be manually disabled.",
   "manifest_version": 3,
   "background": {
