@@ -97,7 +97,7 @@ var eventValidator = {
   "windowFocusChanged": windowFocusChanged,
 };
 
-var started = false;
+var started = true;
 var DEBUG_LOGGING = true;
 function dlog() {
   if (!DEBUG_LOGGING) return;
@@ -176,13 +176,14 @@ chrome.storage.local.get("customSites", function(items) {
 
 function resolveSoundSource(id) {
   return new Promise(function(resolve) {
-    chrome.storage.local.get(["customSound:" + id, "customSites"], function(items) {
-      var custom = items && items["customSound:" + id];
+    chrome.storage.local.get(null, function(items) {
+      items = items || {};
+      var custom = items["customSound:" + id];
       if (custom) {
         resolve(custom);
         return;
       }
-      var sites = (items && items.customSites) || customSites || [];
+      var sites = items.customSites || customSites || [];
       for (var i = 0; i < sites.length; i++) {
         if (sites[i].pattern === id && sites[i].sound) {
           resolve(sites[i].sound);
@@ -338,10 +339,11 @@ function soundEvent(event, name) {
   if (event) {
     var validator = eventValidator[name];
     if (validator) {
-      event.addListener(function() {
+      event.addListener(async function() {
         if (DEBUG_LOGGING) console.log("handling custom event: " + name);
         var canPlay = (eventsToEat == 0);
-        if (validator.apply(this, arguments)) {
+        var valid = await validator.apply(this, arguments);
+        if (valid) {
           if (!canPlay) {
             if (DEBUG_LOGGING) console.log("ate event: " + name);
             eventsToEat--;
@@ -378,21 +380,66 @@ async function playNavSound(id) {
   await playSound(id);
 }
 
-function tabNavigated(tabId, changeInfo, tab) {
+function isSiteMatch(tabUrl, pattern, searchWords) {
+  if (!tabUrl || !pattern) return false;
+  var rawUrl = tabUrl.toLowerCase().trim();
+  var pat = pattern.toLowerCase().trim();
+
+  // Search words match
+  if (searchWords && searchWords.length > 0 && searchWords.indexOf(pat) !== -1) {
+    return true;
+  }
+
+  // Strip query string and trailing slashes for comparison
+  var cleanUrl = rawUrl.split("?")[0].replace(/\/+$/, "");
+  var cleanPat = pat.split("?")[0].replace(/\/+$/, "");
+
+  // 1. Direct or prefix URL match
+  if (cleanUrl === cleanPat || rawUrl.startsWith(pat) || cleanUrl.startsWith(cleanPat + "/")) {
+    return true;
+  }
+
+  // 2. Extract hostnames (domain matching)
+  var getHost = function(u) {
+    var m = /https?:\/\/([^\/:]+)/i.exec(u);
+    return m ? m[1].toLowerCase() : u.replace(/^https?:\/\//, "").replace(/\/.*$/, "").toLowerCase();
+  };
+  var tabHost = getHost(rawUrl);
+  var patHost = getHost(pat);
+
+  if (tabHost && patHost) {
+    if (tabHost === patHost || tabHost.endsWith("." + patHost)) {
+      var patPath = pat.replace(/^https?:\/\//, "").replace(/^[^\/]+/, "").replace(/\/+$/, "");
+      if (!patPath) return true;
+      var tabPath = rawUrl.replace(/^https?:\/\//, "").replace(/^[^\/]+/, "").replace(/\/+$/, "");
+      return tabPath.startsWith(patPath);
+    }
+  }
+  return false;
+}
+
+async function tabNavigated(tabId, changeInfo, tab) {
   // Ensure any looping keypress is stopped if content script didn't get a chance.
   stopSound("keypress");
   if (changeInfo.status != "complete") {
     return false;
   }
-  if (eatEvent("tabNavigated")) {
-    return false;
+
+  // Reliably get tab URL (even across worker wakeups)
+  var currentUrl = (tab && tab.url) || (changeInfo && changeInfo.url) || "";
+  if (!currentUrl && tabId) {
+    try {
+      var tabObj = await chrome.tabs.get(tabId);
+      currentUrl = (tabObj && tabObj.url) || "";
+    } catch (e) {}
   }
+  if (!currentUrl) return false;
 
   if (navSound)
     stopSound(navSound);
 
   var re = /https?:\/\/([^\/:]*)[^\?]*\??(.*)/i;
-  var match = re.exec(tab.url);
+  var match = re.exec(currentUrl);
   var hostname = "";
   var searchWords = [];
 
@@ -413,76 +460,70 @@ function tabNavigated(tabId, changeInfo, tab) {
     }
   }
 
-  // Check user-added custom sites / Easter eggs first
-  if (customSites && customSites.length > 0) {
-    var rawUrl = (tab.url || "").toLowerCase();
-    var cleanUrl = rawUrl;
-    var qIndex = cleanUrl.indexOf("?");
-    if (qIndex > 0) cleanUrl = cleanUrl.substring(0, qIndex);
+  // Ensure customSites are loaded from storage if worker restarted
+  var sites = customSites;
+  if (!sites || sites.length === 0) {
+    var stored = await storageGet("customSites");
+    if (stored) {
+      sites = stored;
+      customSites = stored;
+    }
+  }
 
-    for (var c = 0; c < customSites.length; c++) {
-      var item = customSites[c];
-      var pattern = (item.pattern || "").trim().toLowerCase();
-      if (!pattern) continue;
-
-      // 1. Search words match
-      if (searchWords.length > 0 && searchWords.indexOf(pattern) !== -1) {
-        playNavSound(item.pattern);
-        return false;
-      }
-
-      // 2. Hostname / Domain match (e.g. reddit.com matches reddit.com or www.reddit.com)
-      var cleanPattern = pattern.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-      if (hostname && (hostname === cleanPattern || hostname.endsWith("." + cleanPattern))) {
-        playNavSound(item.pattern);
-        return false;
-      }
-
-      // 3. Full URL prefix or direct match
-      if (rawUrl.startsWith(pattern) || cleanUrl === pattern) {
-        playNavSound(item.pattern);
+  // 1. Check user-added custom sites / Easter eggs first (NEVER eaten by eatEvent)
+  if (sites && sites.length > 0) {
+    for (var c = 0; c < sites.length; c++) {
+      var item = sites[c];
+      if (item && item.pattern && isSiteMatch(currentUrl, item.pattern, searchWords)) {
+        if (DEBUG_LOGGING) dlog("custom site matched:", item.pattern, "for url:", currentUrl);
+        await playNavSound(item.pattern);
         return false;
       }
     }
   }
 
-  if (match) {
-    if (searchWords.length > 0) {
-      for (var j in searchWords) {
-        if (searchSounds[searchWords[j]]) {
-          playNavSound(searchWords[j]);
-          return false;
-        }
-      }
-    }
-    if (hostname) {
-      var parts = hostname.split(".");
-      if (parts.length > 1) {
-        var tld2 = parts.slice(-2).join(".");
-        var tld3 = parts.slice(-3).join(".");
-        var sound = urlSounds[tld2];
-        if (sound) {
-          playNavSound(tld2);
-          return false;
-        }
-        sound = urlSounds[tld3];
-        if (sound) {
-          playNavSound(tld3);
-          return false;
-        }
+  // 2. Check predefined search sounds (NEVER eaten by eatEvent)
+  if (searchWords.length > 0) {
+    for (var j in searchWords) {
+      if (searchSounds[searchWords[j]]) {
+        await playNavSound(searchWords[j]);
+        return false;
       }
     }
   }
 
-  // Now try a direct URL match (without query string).
-  var url = tab.url;
-  var query = url.indexOf("?");
-  if (query > 0) {
-    url = tab.url.substring(0, query);
+  // 3. Check predefined URL / domain sounds (NEVER eaten by eatEvent)
+  if (hostname) {
+    var parts = hostname.split(".");
+    if (parts.length > 1) {
+      var tld2 = parts.slice(-2).join(".");
+      var tld3 = parts.slice(-3).join(".");
+      var sound = urlSounds[tld2];
+      if (sound) {
+        await playNavSound(tld2);
+        return false;
+      }
+      sound = urlSounds[tld3];
+      if (sound) {
+        await playNavSound(tld3);
+        return false;
+      }
+    }
   }
-  var sound = urlSounds[url];
-  if (sound) {
-    playNavSound(url);
+
+  var cleanNavUrl = currentUrl;
+  var qPos = cleanNavUrl.indexOf("?");
+  if (qPos > 0) {
+    cleanNavUrl = cleanNavUrl.substring(0, qPos);
+  }
+  var matchedUrlSound = urlSounds[cleanNavUrl];
+  if (matchedUrlSound) {
+    await playNavSound(cleanNavUrl);
+    return false;
+  }
+
+  // 4. Default navigation sound: only play if not eaten by cross-event noise debouncing
+  if (eatEvent("tabNavigated")) {
     return false;
   }
 
@@ -674,19 +715,13 @@ if (chrome.runtime && chrome.runtime.onInstalled) {
 }
 if (chrome.runtime && chrome.runtime.onStartup) {
   chrome.runtime.onStartup.addListener(function() {
-    if (DEBUG_LOGGING) dlog("onStartup");
+    if (DEBUG_LOGGING) dlog("onStartup: playing startup sound");
+    storageGet("startup").then(function(val) {
+      if (!val || val === "enabled") {
+        playSound("startup");
+      }
+    });
   });
 }
 
-offscreenInit().then(function() {
-  // Kickstart: if startup is disabled, we still need to mark started to allow other sounds
-  storageGet("startup").then(function(val) {
-    if (val && val !== "enabled") {
-      started = true;
-      if (DEBUG_LOGGING) dlog("startup disabled in storage; marking started=true");
-    } else {
-      if (DEBUG_LOGGING) dlog("playing startup");
-      playSound("startup");
-    }
-  });
-});
+offscreenInit();
