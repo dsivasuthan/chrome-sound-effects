@@ -466,7 +466,7 @@ function renderCatalog() {
 
     // Handle any extra discovered sounds saved in storage not in presets
     var otherKeys = Object.keys(items).filter(function(k) {
-      return !knownKeys[k] && !k.startsWith("customSound:") && k !== "customSites";
+      return !knownKeys[k] && !k.startsWith("customSound:") && k !== "customSites" && k !== "theme";
     });
 
     if (otherKeys.length > 0) {
@@ -536,7 +536,50 @@ function setupBannerActions() {
   }
 }
 
+function applyTheme(theme) {
+  if (theme === "dark" || theme === "light") {
+    document.documentElement.setAttribute("data-theme", theme);
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+  updateThemeButton(theme || "auto");
+}
+
+function updateThemeButton(theme) {
+  var btn = document.getElementById("theme-toggle-btn");
+  if (!btn) return;
+  if (theme === "dark") {
+    btn.textContent = "🌙 Dark";
+  } else if (theme === "light") {
+    btn.textContent = "☀️ Light";
+  } else {
+    btn.textContent = "🌓 Auto";
+  }
+}
+
+function setupTheme() {
+  chrome.storage.local.get("theme", function(items) {
+    var theme = (items && items.theme) || "auto";
+    applyTheme(theme);
+  });
+
+  var btn = document.getElementById("theme-toggle-btn");
+  if (btn) {
+    btn.onclick = function() {
+      chrome.storage.local.get("theme", function(items) {
+        var current = (items && items.theme) || "auto";
+        var next = (current === "auto") ? "dark" : (current === "dark" ? "light" : "auto");
+        chrome.storage.local.set({ theme: next }, function() {
+          applyTheme(next);
+          showToast("Theme set to: " + (next === "auto" ? "System Auto" : next.charAt(0).toUpperCase() + next.slice(1)));
+        });
+      });
+    };
+  }
+}
+
 document.addEventListener("DOMContentLoaded", function() {
+  setupTheme();
   setupBannerActions();
   renderCatalog();
 });

@@ -4,6 +4,104 @@
 <meta charset="utf-8">
 <title>Chrome Sound Effects - Options</title>
 <style>
+:root {
+  --bg-page: #f6f8fb;
+  --bg-card: #ffffff;
+  --text-primary: #111827;
+  --text-secondary: #374151;
+  --text-muted: #6b7280;
+  --border-color: #e5e7eb;
+  --border-subtle: #f3f4f6;
+  --row-border: #f9fafb;
+  --banner-bg: #eff6ff;
+  --banner-border: #bfdbfe;
+  --banner-text: #1e40af;
+  --badge-bg: #f3f4f6;
+  --badge-text: #6b7280;
+  --custom-badge-bg: #dbeafe;
+  --custom-badge-text: #1e40af;
+  --site-badge-bg: #fef3c7;
+  --site-badge-text: #92400e;
+  --btn-bg: #ffffff;
+  --btn-border: #d1d5db;
+  --btn-text: #374151;
+  --btn-hover-bg: #f9fafb;
+  --preview-bg: #eff6ff;
+  --preview-border: #bfdbfe;
+  --preview-text: #2563eb;
+  --preview-hover: #dbeafe;
+  --input-bg: #ffffff;
+  --input-border: #d1d5db;
+  --input-text: #111827;
+  --shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-page: #0f172a;
+    --bg-card: #1e293b;
+    --text-primary: #f8fafc;
+    --text-secondary: #cbd5e1;
+    --text-muted: #94a3b8;
+    --border-color: #334155;
+    --border-subtle: #334155;
+    --row-border: #243247;
+    --banner-bg: #1e293b;
+    --banner-border: #3b82f6;
+    --banner-text: #93c5fd;
+    --badge-bg: #334155;
+    --badge-text: #cbd5e1;
+    --custom-badge-bg: #1e3a8a;
+    --custom-badge-text: #bfdbfe;
+    --site-badge-bg: #78350f;
+    --site-badge-text: #fde68a;
+    --btn-bg: #1e293b;
+    --btn-border: #475569;
+    --btn-text: #e2e8f0;
+    --btn-hover-bg: #334155;
+    --preview-bg: #1e3a8a;
+    --preview-border: #3b82f6;
+    --preview-text: #93c5fd;
+    --preview-hover: #1d4ed8;
+    --input-bg: #0f172a;
+    --input-border: #475569;
+    --input-text: #f8fafc;
+    --shadow: 0 1px 3px rgba(0,0,0,0.25);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg-page: #0f172a;
+  --bg-card: #1e293b;
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  --border-color: #334155;
+  --border-subtle: #334155;
+  --row-border: #243247;
+  --banner-bg: #1e293b;
+  --banner-border: #3b82f6;
+  --banner-text: #93c5fd;
+  --badge-bg: #334155;
+  --badge-text: #cbd5e1;
+  --custom-badge-bg: #1e3a8a;
+  --custom-badge-text: #bfdbfe;
+  --site-badge-bg: #78350f;
+  --site-badge-text: #fde68a;
+  --btn-bg: #1e293b;
+  --btn-border: #475569;
+  --btn-text: #e2e8f0;
+  --btn-hover-bg: #334155;
+  --preview-bg: #1e3a8a;
+  --preview-border: #3b82f6;
+  --preview-text: #93c5fd;
+  --preview-hover: #1d4ed8;
+  --input-bg: #0f172a;
+  --input-border: #475569;
+  --input-text: #f8fafc;
+  --shadow: 0 1px 3px rgba(0,0,0,0.25);
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
 }
@@ -12,10 +110,11 @@ body, button, input, select, textarea {
 }
 body {
   margin: 0;
-  background: #f6f8fb;
-  color: #1f2937;
+  background: var(--bg-page);
+  color: var(--text-primary);
   font-size: 14px;
   min-width: 740px;
+  transition: background 0.2s ease, color 0.2s ease;
 }
 #page {
   max-width: 820px;
@@ -25,21 +124,41 @@ body {
 .header-area {
   margin-bottom: 16px;
 }
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
 h1 {
   font-size: 22px;
   margin: 0 0 4px 0;
-  color: #111827;
+  color: var(--text-primary);
 }
 .subtitle {
   margin: 0 0 16px 0;
-  color: #6b7280;
+  color: var(--text-muted);
   font-size: 13px;
+}
+button.theme-toggle-btn {
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  color: var(--text-secondary);
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+button.theme-toggle-btn:hover {
+  background: var(--btn-hover-bg);
 }
 
 /* Config notice & actions banner */
 .config-banner {
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
+  background: var(--banner-bg);
+  border: 1px solid var(--banner-border);
   border-radius: 8px;
   padding: 12px 16px;
   margin-bottom: 20px;
@@ -50,7 +169,7 @@ h1 {
   gap: 10px;
 }
 .config-banner-text {
-  color: #1e40af;
+  color: var(--banner-text);
   font-size: 13px;
   display: flex;
   align-items: center;
@@ -63,27 +182,28 @@ h1 {
 
 /* Categories & sound list */
 .category-card {
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
   border-radius: 10px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+  box-shadow: var(--shadow);
   padding: 14px 16px;
   margin-bottom: 18px;
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
 .category-header {
   margin-bottom: 10px;
   padding-bottom: 8px;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid var(--border-subtle);
 }
 .category-title {
   font-size: 15px;
   font-weight: 600;
-  color: #111827;
+  color: var(--text-primary);
   margin: 0;
 }
 .category-desc {
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-muted);
   margin: 2px 0 0 0;
 }
 .sound-row {
@@ -91,7 +211,7 @@ h1 {
   align-items: center;
   gap: 10px;
   padding: 7px 0;
-  border-bottom: 1px solid #f9fafb;
+  border-bottom: 1px solid var(--row-border);
 }
 .sound-row:last-child {
   border-bottom: none;
@@ -105,21 +225,21 @@ h1 {
 }
 .sound-name {
   font-weight: 500;
-  color: #374151;
+  color: var(--text-secondary);
   font-size: 13px;
 }
 .sound-file {
   font-size: 11px;
-  color: #9ca3af;
-  background: #f3f4f6;
+  color: var(--text-muted);
+  background: var(--badge-bg);
   padding: 2px 6px;
   border-radius: 4px;
   white-space: nowrap;
 }
 .custom-badge {
   font-size: 11px;
-  background: #dbeafe;
-  color: #1e40af;
+  background: var(--custom-badge-bg);
+  color: var(--custom-badge-text);
   padding: 2px 6px;
   border-radius: 4px;
   font-weight: 500;
@@ -135,9 +255,9 @@ h1 {
 
 /* Buttons */
 button {
-  background: #ffffff;
-  border: 1px solid #d1d5db;
-  color: #374151;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  color: var(--btn-text);
   border-radius: 6px;
   padding: 5px 8px;
   font-size: 12px;
@@ -151,8 +271,8 @@ button {
   gap: 4px;
 }
 button:hover {
-  background: #f9fafb;
-  border-color: #9ca3af;
+  background: var(--btn-hover-bg);
+  border-color: var(--border-color);
 }
 button.btn-primary {
   background: #2563eb;
@@ -165,12 +285,12 @@ button.btn-primary:hover {
 button.btn-danger {
   grid-column: 4;
   width: 74px;
-  color: #b91c1c;
+  color: #ef4444;
   border-color: #fca5a5;
-  background: #fef2f2;
+  background: rgba(239, 68, 68, 0.1);
 }
 button.btn-danger:hover {
-  background: #fee2e2;
+  background: rgba(239, 68, 68, 0.2);
   border-color: #f87171;
 }
 button.btn-clear {
@@ -180,21 +300,17 @@ button.btn-clear {
 button.btn-preview {
   grid-column: 1;
   width: 84px;
-  color: #2563eb;
-  border-color: #bfdbfe;
-  background: #eff6ff;
+  color: var(--preview-text);
+  border-color: var(--preview-border);
+  background: var(--preview-bg);
 }
 button.btn-preview:hover {
-  background: #dbeafe;
-  border-color: #93c5fd;
+  background: var(--preview-hover);
 }
 button.btn-preview.playing {
-  background: #fef2f2;
-  border-color: #fca5a5;
-  color: #dc2626;
-}
-button.btn-preview.playing:hover {
-  background: #fee2e2;
+  background: rgba(239, 68, 68, 0.15);
+  border-color: #ef4444;
+  color: #ef4444;
 }
 
 input[type="checkbox"] {
@@ -210,18 +326,32 @@ input[type="file"].file-input {
   font-size: 11px;
   overflow: hidden;
   box-sizing: border-box;
+  color: var(--text-muted);
+}
+input[type="file"]::file-selector-button {
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  border: 1px solid var(--btn-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+input[type="file"]::file-selector-button:hover {
+  background: var(--btn-hover-bg);
 }
 
 /* Add site box */
 .add-site-section {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px dashed #e5e7eb;
+  border-top: 1px dashed var(--border-color);
 }
 .add-site-title {
   font-size: 13px;
   font-weight: 600;
-  color: #374151;
+  color: var(--text-primary);
   margin-bottom: 8px;
 }
 .add-site-form {
@@ -234,7 +364,9 @@ input[type="file"].file-input {
   flex: 1 1 220px;
   padding: 6px 10px;
   font-size: 12px;
-  border: 1px solid #d1d5db;
+  background: var(--input-bg);
+  color: var(--input-text);
+  border: 1px solid var(--input-border);
   border-radius: 6px;
   outline: none;
 }
@@ -245,10 +377,10 @@ input[type="file"].file-input {
 .add-site-form select {
   padding: 6px 10px;
   font-size: 12px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--input-border);
   border-radius: 6px;
-  background: #ffffff;
-  color: #374151;
+  background: var(--input-bg);
+  color: var(--input-text);
   outline: none;
   cursor: pointer;
 }
@@ -257,35 +389,11 @@ input[type="file"].file-input {
 }
 .site-badge {
   font-size: 11px;
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--site-badge-bg);
+  color: var(--site-badge-text);
   padding: 2px 6px;
   border-radius: 4px;
   font-weight: 500;
-}
-
-input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-  accent-color: #2563eb;
-}
-input[type="file"] {
-  font-size: 11px;
-}
-input[type="file"]::file-selector-button {
-  background: #ffffff;
-  color: #374151;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-input[type="file"]::file-selector-button:hover {
-  background: #f3f4f6;
-  border-color: #9ca3af;
 }
 
 /* Toast alert */
@@ -293,12 +401,13 @@ input[type="file"]::file-selector-button:hover {
   position: fixed;
   bottom: 24px;
   right: 24px;
-  background: #1f2937;
-  color: #ffffff;
+  background: #1e293b;
+  color: #f8fafc;
+  border: 1px solid #334155;
   padding: 10px 16px;
   border-radius: 8px;
   font-size: 13px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
   opacity: 0;
   transform: translateY(8px);
   pointer-events: none;
@@ -312,14 +421,14 @@ input[type="file"]::file-selector-button:hover {
 
 #attributions {
   margin-top: 24px;
-  color: #6b7280;
+  color: var(--text-muted);
   font-size: 12px;
 }
-#attributions a { color: #2563eb; text-decoration: none; }
+#attributions a { color: #3b82f6; text-decoration: none; }
 #attributions a:hover { text-decoration: underline; }
 .donate {
   text-align: center;
-  color: #6b7280;
+  color: var(--text-muted);
   margin-top: 24px;
   font-size: 13px;
 }
@@ -331,7 +440,10 @@ input[type="file"]::file-selector-button:hover {
 
 <div id="page">
   <div class="header-area">
-    <h1>Chrome Sound Effects</h1>
+    <div class="header-top">
+      <h1>Chrome Sound Effects</h1>
+      <button type="button" id="theme-toggle-btn" class="theme-toggle-btn" title="Toggle theme (Auto / Dark / Light)">🌓 Auto</button>
+    </div>
     <p class="subtitle">Listen to sound previews, enable/disable events, and upload custom sounds.</p>
   </div>
 
