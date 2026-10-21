@@ -149,17 +149,18 @@ var currentlyLooping = {};
 
 function safeSendMessage(message) {
   try {
-    // Allow init to go through any time; only queue play/stop when offscreen not ready
-    if (!offscreenIsReady && (message && (message.type === "play" || message.type === "stop"))) {
-      pendingMessages.push(message);
-      if (DEBUG_LOGGING) dlog("queued message", message.type, "for id", message.id, "queueLen=", pendingMessages.length);
-      return;
-    }
+    if (!message) return;
     if (DEBUG_LOGGING) dlog("sending message", message.type, "for id", message.id);
     chrome.runtime.sendMessage(message, function() {
-      // Swallow connection errors (offscreen not yet ready)
       var err = chrome.runtime.lastError;
-      if (err && DEBUG_LOGGING) dlog("sendMessage lastError:", err.message);
+      if (err) {
+        if (DEBUG_LOGGING) dlog("sendMessage lastError:", err.message);
+        if (message.type === "play" || message.type === "stop") {
+          pendingMessages.push(message);
+          offscreenIsReady = false;
+          ensureOffscreenDocument();
+        }
+      }
     });
   } catch (e) {
     // ignore
@@ -190,6 +191,19 @@ function resolveSoundSource(id) {
           return;
         }
       }
+      for (var i = 0; i < sites.length; i++) {
+        if (sites[i].pattern && sites[i].sound) {
+          if (isSiteMatch(id, sites[i].pattern) || isSiteMatch(sites[i].pattern, id)) {
+            var patCustom = items["customSound:" + sites[i].pattern];
+            if (patCustom) {
+              resolve(patCustom);
+              return;
+            }
+            resolve(sites[i].sound);
+            return;
+          }
+        }
+      }
       // Search default mappings
       for (var list in soundLists) {
         if (soundLists[list].hasOwnProperty(id)) {
@@ -208,6 +222,7 @@ async function ensureOffscreenDocument() {
       var has = await chrome.offscreen.hasDocument();
       if (DEBUG_LOGGING) dlog("offscreen.hasDocument() ->", has);
       if (!has) {
+        offscreenIsReady = false;
         if (DEBUG_LOGGING) dlog("creating offscreen document (hasDocument=false)");
         await chrome.offscreen.createDocument({
           url: OFFSCREEN_DOCUMENT_PATH,
@@ -215,6 +230,8 @@ async function ensureOffscreenDocument() {
           justification: "Play extension sounds on browser events"
         });
         if (DEBUG_LOGGING) dlog("offscreen document created");
+      } else {
+        offscreenIsReady = true;
       }
     } catch (e) {
       // Fallback to create if hasDocument not available or throws
@@ -227,7 +244,7 @@ async function ensureOffscreenDocument() {
         });
         if (DEBUG_LOGGING) dlog("offscreen document created (fallback)");
       } catch (e2) {
-        // If it already exists, ignore.
+        offscreenIsReady = true;
         if (DEBUG_LOGGING) dlog("offscreen create failed/exists:", e2 && e2.message);
       }
     }
@@ -240,6 +257,7 @@ async function ensureOffscreenDocument() {
         justification: "Play extension sounds on browser events"
       });
     } catch (e3) {
+      offscreenIsReady = true;
       if (DEBUG_LOGGING) dlog("offscreen create failed/exists:", e3 && e3.message);
     }
   }
@@ -418,15 +436,20 @@ function isSiteMatch(tabUrl, pattern, searchWords) {
   return false;
 }
 
+var lastNavigated = {};
+
 async function tabNavigated(tabId, changeInfo, tab) {
   // Ensure any looping keypress is stopped if content script didn't get a chance.
   stopSound("keypress");
-  if (changeInfo.status != "complete") {
+
+  // Catch both standard document navigation (status="complete" or initial url)
+  // and SPA / Turbo in-page transitions (changeInfo.url)
+  if (!changeInfo.url && changeInfo.status !== "complete") {
     return false;
   }
 
   // Reliably get tab URL (even across worker wakeups)
-  var currentUrl = (tab && tab.url) || (changeInfo && changeInfo.url) || "";
+  var currentUrl = changeInfo.url || (tab && tab.url) || "";
   if (!currentUrl && tabId) {
     try {
       var tabObj = await chrome.tabs.get(tabId);
@@ -434,6 +457,18 @@ async function tabNavigated(tabId, changeInfo, tab) {
     } catch (e) {}
   }
   if (!currentUrl) return false;
+
+  if (currentUrl.startsWith("chrome://") && currentUrl !== "chrome://extensions/") {
+    return false;
+  }
+
+  // Debounce duplicate status/url triggers for the same tab within 1.5 seconds
+  var now = Date.now();
+  var last = lastNavigated[tabId];
+  if (last && last.url === currentUrl && (now - last.time) < 1500) {
+    return false;
+  }
+  lastNavigated[tabId] = { url: currentUrl, time: now };
 
   if (navSound)
     stopSound(navSound);
@@ -630,10 +665,18 @@ chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
       }
     }
     chrome.storage.local.get(null, function(items) {
-      for (var key in items) {
-        if (key.indexOf("customSound:") === 0) {
-          var soundId = key.substring("customSound:".length);
-          payload.mappings[soundId] = items[key];
+      if (items) {
+        var sites = items.customSites || customSites || [];
+        for (var s = 0; s < sites.length; s++) {
+          if (sites[s].pattern && sites[s].sound) {
+            payload.mappings[sites[s].pattern] = sites[s].sound;
+          }
+        }
+        for (var key in items) {
+          if (key.indexOf("customSound:") === 0) {
+            var soundId = key.substring("customSound:".length);
+            payload.mappings[soundId] = items[key];
+          }
         }
       }
       if (DEBUG_LOGGING) dlog("sending init post-ready with mapping count:", Object.keys(payload.mappings).length);

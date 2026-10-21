@@ -29,8 +29,10 @@
     audio = new Audio();
     audio.id = id;
     audio.preload = "auto";
-    // Accept a full data URL (for custom sounds) or a relative file
+    // Accept a full data URL, full http(s) URL, or relative file
     if (fileOrDataUrl && /^data:/.test(fileOrDataUrl)) {
+      audio.src = fileOrDataUrl;
+    } else if (fileOrDataUrl && /^https?:\/\//.test(fileOrDataUrl)) {
       audio.src = fileOrDataUrl;
     } else {
       audio.src = baseUrl + fileOrDataUrl;
@@ -71,9 +73,9 @@
         if (!file) return;
         audio = loadSoundIfNeeded(id, file);
       }
-      // If the source changed (custom uploaded), update src
+      // If the source changed (custom uploaded or changed preset), update src
       if (file && audio) {
-        if (/^data:/.test(file)) {
+        if (/^data:/.test(file) || /^https?:\/\//.test(file)) {
           if (audio.src !== file) audio.src = file;
         } else {
           var target = baseUrl + file;
