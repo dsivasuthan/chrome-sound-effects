@@ -1,11 +1,14 @@
 /*
  * Content script for Chrome Sounds.
- * Tracks in-page events and notifies the background page.
+ * Tracks in-page events and notifies the service worker (MV3).
  */
 
 function sendEvent(event, value) {
-  console.log("sendEvent: " + event + "," + value);
-  chrome.extension.sendRequest({eventName: event, eventValue: value});
+  try {
+    if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage({ type: "contentEvent", eventName: event, eventValue: value });
+    }
+  } catch (e) {}
 }
 
 // Timers to trigger "stopEvent" for coalescing events.

@@ -1,26 +1,35 @@
 {
   "name": "Chrome Sound Effects",
-  "version": "1.2",
+  "version": "2.0.1",
   "description": "Add sounds to events triggered by user in Chrome, like switching tabs, etc. They can be manually disabled.",
+  "manifest_version": 3,
   "background": {
-    "scripts": ["bg.js"]
+    "service_worker": "bg.js"
   },
-  "options_page": "options.html",
+  "action": {
+    "default_icon": "icon.png",
+    "default_popup": "options.html"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
   "icons": { "128": "icon.png" },
   "permissions": [
     "tabs",
     "bookmarks",
+    "offscreen",
+    "storage"
+  ],
+  "host_permissions": [
     "http://*/*",
     "https://*/*"
   ],
-  "content_scripts": [ {
-    "matches": ["http://*/*", "https://*/*"],
-    "js": ["content.js"],
-    "all_frames": true
-  }],
-  "browser_action": {
-    "default_icon": "icon.png",
-    "default_popup": "options.html"
-  },
-  "manifest_version": 2
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "all_frames": true
+    }
+  ]
 }

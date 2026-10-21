@@ -3,12 +3,12 @@
 // found in the LICENSE file.
 
 /*
- * Background page for Chrome Sounds extension.
- * This tracks various events from Chrome and plays sounds.
+ * Service worker for Chrome Sounds extension (Manifest V3).
+ * Tracks Chrome events and coordinates audio playback via an offscreen
+ * document, since service workers cannot play audio directly.
  */
 
 // Map of hostname suffixes or URLs without query params to sounds.
-// Yeah OK, some of these are a little cliche...
 var urlSounds = {
   "http://www.google.ca/": "canadian-hello.mp3",
   "about:histograms": "time-passing.mp3",
@@ -25,7 +25,6 @@ var urlSounds = {
 };
 
 // Map of query parameter words to sounds.
-// More easy cliches...
 var searchSounds = {
   "scotland": "bagpipe.mp3",
   "seattle": "rain.mp3",
@@ -39,7 +38,7 @@ var tabNoteSounds = {
   "tab3": "mando-4.mp3",
   "tab4": "mando-5.mp3",
   "tab5": "mando-6.mp3",
-  "tab6": "mando-7.mp3",
+  "tab6": "mando-7.mp3"
 };
 
 // Map of sounds that play in a continuous loop while an event is happening
@@ -69,19 +68,16 @@ var eventSounds = {
   "startup": "whoosh-19.mp3"
 };
 
-var soundLists = [urlSounds, searchSounds, eventSounds, tabNoteSounds,
-    contentSounds];
+var soundLists = [urlSounds, searchSounds, eventSounds, tabNoteSounds, contentSounds];
 
-var sounds = {};
-
-// Map of event names to extension events.
 // Events intentionally skipped:
 // chrome.windows.onRemoved - can't suppress the tab removed that comes first
 var events = {
   "tabCreated": chrome.tabs.onCreated,
   "tabMoved": chrome.tabs.onMoved,
   "tabRemoved": chrome.tabs.onRemoved,
-  "tabSelectionChanged": chrome.tabs.onSelectionChanged,
+  // MV2 onSelectionChanged -> MV3 onActivated
+  "tabSelectionChanged": chrome.tabs.onActivated,
   "tabAttached": chrome.tabs.onAttached,
   "tabDetached": chrome.tabs.onDetached,
   "tabNavigated": chrome.tabs.onUpdated,
@@ -92,8 +88,6 @@ var events = {
   "bookmarkRemoved": chrome.bookmarks.onRemoved
 };
 
-// Map of event name to a validation function that is should return true if
-// the default sound should be played for this event.
 var eventValidator = {
   "tabCreated": tabCreated,
   "tabNavigated": tabNavigated,
@@ -104,109 +98,189 @@ var eventValidator = {
 };
 
 var started = false;
+var DEBUG_LOGGING = true;
+function dlog() {
+  if (!DEBUG_LOGGING) return;
+  var args = Array.prototype.slice.call(arguments);
+  args.unshift("[BG]");
+  console.log.apply(console, args);
+}
 
-function shouldPlay(id) {
-  // Ignore all events until the startup sound has finished.
-  if (id != "startup" && !started)
-    return false;
-  var val = localStorage.getItem(id);
-  if (val && val != "enabled") {
-    console.log(id + " disabled");
+// Storage helpers (MV3: no localStorage in service worker)
+function storageGet(key) {
+  return new Promise(function(resolve) {
+    chrome.storage.local.get(key, function(items) { resolve(items[key]); });
+  });
+}
+
+function storageSet(key, value) {
+  return new Promise(function(resolve) {
+    var obj = {}; obj[key] = value; chrome.storage.local.set(obj, function() { resolve(); });
+  });
+}
+
+async function shouldPlay(id) {
+  if (id !== "startup" && !started)
+    { if (DEBUG_LOGGING) dlog("shouldPlay false: not started yet for", id); return false; }
+  var val = await storageGet(id);
+  if (val && val !== "enabled") {
+    if (DEBUG_LOGGING) dlog(id + " disabled via storage value:", val);
     return false;
   }
+  if (DEBUG_LOGGING) dlog("shouldPlay true for", id);
   return true;
 }
 
-function didPlay(id) {
-  if (!localStorage.getItem(id))
-    localStorage.setItem(id, "enabled");
+async function didPlay(id) {
+  var existing = await storageGet(id);
+  if (!existing)
+    await storageSet(id, "enabled");
 }
 
-function playSound(id, loop) {
-  if (!shouldPlay(id))
-    return;
+// Offscreen document coordination
+var OFFSCREEN_DOCUMENT_PATH = "offscreen.html";
+var base_url = "https://dl.google.com/dl/chrome/extensions/audio/";
 
-  var sound = sounds[id];
-  console.log("playsound: " + id);
-  if (sound && sound.src) {
-    if (!sound.paused) {
-      if (sound.currentTime < 0.2) {
-        console.log("ignoring fast replay: " + id + "/" + sound.currentTime);
+var offscreenIsReady = false;
+var pendingMessages = [];
+// Track only looping content sounds to resume after offscreen restarts
+var loopableIds = (function(){ var s = {}; for (var k in contentSounds) { s[k] = true; } return s; })();
+var currentlyLooping = {};
+
+function safeSendMessage(message) {
+  try {
+    // Allow init to go through any time; only queue play/stop when offscreen not ready
+    if (!offscreenIsReady && (message && (message.type === "play" || message.type === "stop"))) {
+      pendingMessages.push(message);
+      if (DEBUG_LOGGING) dlog("queued message", message.type, "for id", message.id, "queueLen=", pendingMessages.length);
+      return;
+    }
+    if (DEBUG_LOGGING) dlog("sending message", message.type, "for id", message.id);
+    chrome.runtime.sendMessage(message, function() {
+      // Swallow connection errors (offscreen not yet ready)
+      var err = chrome.runtime.lastError;
+      if (err && DEBUG_LOGGING) dlog("sendMessage lastError:", err.message);
+    });
+  } catch (e) {
+    // ignore
+  }
+}
+
+function resolveSoundSource(id) {
+  return new Promise(function(resolve) {
+    chrome.storage.local.get("customSound:" + id, function(items) {
+      var custom = items && items["customSound:" + id];
+      if (custom) {
+        resolve(custom);
         return;
       }
-      sound.pause();
-      sound.currentTime = 0;
-    }
-    if (loop)
-      sound.loop = loop;
+      // Search default mappings
+      for (var list in soundLists) {
+        if (soundLists[list].hasOwnProperty(id)) {
+          resolve(soundLists[list][id]);
+          return;
+        }
+      }
+      resolve(null);
+    });
+  });
+}
 
-    // Sometimes, when playing multiple times, readyState is HAVE_METADATA.
-    if (sound.readyState == 0) {  // HAVE_NOTHING
-      console.log("bad ready state: " + sound.readyState);
-    } else if (sound.error) {
-      console.log("media error: " + sound.error);
-    } else {
-      didPlay(id);
-      sound.play();
+async function ensureOffscreenDocument() {
+  if (chrome.offscreen && chrome.offscreen.hasDocument) {
+    try {
+      var has = await chrome.offscreen.hasDocument();
+      if (DEBUG_LOGGING) dlog("offscreen.hasDocument() ->", has);
+      if (!has) {
+        if (DEBUG_LOGGING) dlog("creating offscreen document (hasDocument=false)");
+        await chrome.offscreen.createDocument({
+          url: OFFSCREEN_DOCUMENT_PATH,
+          reasons: [chrome.offscreen.Reason.AUDIO_PLAYBACK],
+          justification: "Play extension sounds on browser events"
+        });
+        if (DEBUG_LOGGING) dlog("offscreen document created");
+      }
+    } catch (e) {
+      // Fallback to create if hasDocument not available or throws
+      try {
+        if (DEBUG_LOGGING) dlog("creating offscreen document (fallback path)", e && e.message);
+        await chrome.offscreen.createDocument({
+          url: OFFSCREEN_DOCUMENT_PATH,
+          reasons: [chrome.offscreen.Reason.AUDIO_PLAYBACK],
+          justification: "Play extension sounds on browser events"
+        });
+        if (DEBUG_LOGGING) dlog("offscreen document created (fallback)");
+      } catch (e2) {
+        // If it already exists, ignore.
+        if (DEBUG_LOGGING) dlog("offscreen create failed/exists:", e2 && e2.message);
+      }
     }
-  } else {
-    console.log("bad playSound: " + id);
+  } else if (chrome.offscreen) {
+    try {
+      if (DEBUG_LOGGING) dlog("creating offscreen document (no hasDocument API)");
+      await chrome.offscreen.createDocument({
+        url: OFFSCREEN_DOCUMENT_PATH,
+        reasons: ["AUDIO_PLAYBACK"],
+        justification: "Play extension sounds on browser events"
+      });
+    } catch (e3) {
+      if (DEBUG_LOGGING) dlog("offscreen create failed/exists:", e3 && e3.message);
+    }
   }
 }
 
-function stopSound(id) {
-  console.log("stopSound: " + id);
-  var sound = sounds[id];
-  if (sound && sound.src && !sound.paused) {
-    sound.pause();
-    sound.currentTime = 0;
+async function offscreenInit() {
+  await ensureOffscreenDocument();
+  var payload = { type: "init", baseUrl: base_url, mappings: {} };
+  for (var list in soundLists) {
+    for (var id in soundLists[list]) {
+      payload.mappings[id] = soundLists[list][id];
+    }
   }
-}
-
-var base_url = "http://dl.google.com/dl/chrome/extensions/audio/";
-
-function soundLoadError(audio, id) {
-  console.log("failed to load sound: " + id + "-" + audio.src);
-  audio.src = "";
-  if (id == "startup")
+  // Overlay any custom sounds from storage
+  chrome.storage.local.get(null, function(items) {
+    if (DEBUG_LOGGING) dlog("offscreenInit merging custom sounds. items count:", items ? Object.keys(items).length : 0);
+    for (var key in items) {
+      if (key.indexOf("customSound:") === 0) {
+        var soundId = key.substring("customSound:".length);
+        payload.mappings[soundId] = items[key];
+      }
+    }
+    // Send init (do not reset readiness here; it can cause messages to queue indefinitely)
+    if (DEBUG_LOGGING) dlog("sending init to offscreen with mapping count:", Object.keys(payload.mappings).length);
+    safeSendMessage(payload);
+    // Consider initialization complete even if startup sound is disabled
     started = true;
+  });
 }
 
-function soundLoaded(audio, id) {
-  console.log("loaded sound: " + id);
-  sounds[id] = audio;
-  if (id == "startup")
-    playSound(id);
-}
-
-// Hack to keep a reference to the objects while we're waiting for them to load.
-var notYetLoaded = {};
-
-function loadSound(file, id) {
-  if (!file.length) {
-    console.log("no sound for " + id);
-    return;
+async function playSound(id, loop) {
+  if (!(await shouldPlay(id))) return;
+  await didPlay(id);
+  await ensureOffscreenDocument();
+  var src = await resolveSoundSource(id);
+  if (!src) return;
+  if (DEBUG_LOGGING) dlog("playSound", id, "loop=", !!loop, "src=", src && (src.substring(0,5)==='data:'?'[dataURL]':src));
+  safeSendMessage({ type: "play", id: id, loop: !!loop, src: src });
+  if (loop && loopableIds[id]) {
+    currentlyLooping[id] = true;
+  } else {
+    delete currentlyLooping[id];
   }
-  var audio = new Audio();
-  audio.id = id;
-  audio.onerror = function() { soundLoadError(audio, id); };
-  audio.addEventListener("canplaythrough",
-      function() { soundLoaded(audio, id); }, false);
-  if (id == "startup") {
-    audio.addEventListener("ended", function() { started = true; });
-  }
-  audio.src = base_url + file;
-  audio.load();
-  notYetLoaded[id] = audio;
 }
 
-// Remember the last event so that we can avoid multiple events firing
-// unnecessarily (e.g. selection changed due to close).
+async function stopSound(id) {
+  await ensureOffscreenDocument();
+  if (DEBUG_LOGGING) dlog("stopSound", id);
+  safeSendMessage({ type: "stop", id: id });
+  delete currentlyLooping[id];
+}
+
+// Event de-bouncing for cross-event noise
 var eventsToEat = 0;
-
 function eatEvent(name) {
   if (eventsToEat > 0) {
-    console.log("ate event: " + name);
+    if (DEBUG_LOGGING) console.log("ate event: " + name);
     eventsToEat--;
     return true;
   }
@@ -218,14 +292,11 @@ function soundEvent(event, name) {
     var validator = eventValidator[name];
     if (validator) {
       event.addListener(function() {
-        console.log("handling custom event: " + name);
-
-        // Check this first since the validator may bump the count for future
-        // events.
+        if (DEBUG_LOGGING) console.log("handling custom event: " + name);
         var canPlay = (eventsToEat == 0);
         if (validator.apply(this, arguments)) {
           if (!canPlay) {
-            console.log("ate event: " + name);
+            if (DEBUG_LOGGING) console.log("ate event: " + name);
             eventsToEat--;
             return;
           }
@@ -234,7 +305,7 @@ function soundEvent(event, name) {
       });
     } else {
       event.addListener(function() {
-        console.log("handling event: " + name);
+        if (DEBUG_LOGGING) console.log("handling event: " + name);
         if (eatEvent(name)) {
           return;
         }
@@ -242,31 +313,27 @@ function soundEvent(event, name) {
       });
     }
   } else {
-    console.log("no event for " + name);
+    if (DEBUG_LOGGING) console.log("no event for " + name);
   }
 }
 
 var navSound;
-
-function stopNavSound() {
+async function stopNavSound() {
   if (navSound) {
-    stopSound(navSound);
+    await stopSound(navSound);
     navSound = null;
   }
 }
 
-function playNavSound(id) {
-  stopNavSound();
+async function playNavSound(id) {
+  await stopNavSound();
   navSound = id;
-  playSound(id);
+  await playSound(id);
 }
 
 function tabNavigated(tabId, changeInfo, tab) {
-  // Quick fix to catch the case where the content script doesn't have a chance
-  // to stop itself.
+  // Ensure any looping keypress is stopped if content script didn't get a chance.
   stopSound("keypress");
-
-  //console.log(JSON.stringify(changeInfo) + JSON.stringify(tab));
   if (changeInfo.status != "complete") {
     return false;
   }
@@ -274,13 +341,11 @@ function tabNavigated(tabId, changeInfo, tab) {
     return false;
   }
 
-  console.log(JSON.stringify(tab));
-
   if (navSound)
     stopSound(navSound);
 
   var re = /https?:\/\/([^\/:]*)[^\?]*\??(.*)/i;
-  match = re.exec(tab.url);
+  var match = re.exec(tab.url);
   if (match) {
     if (match.length == 3) {
       var query = match[2];
@@ -289,11 +354,9 @@ function tabNavigated(tabId, changeInfo, tab) {
         if (parts[i].indexOf("q=") == 0) {
           var q = decodeURIComponent(parts[i].substring(2));
           q = q.replace("+", " ");
-          console.log("query == " + q);
           var words = q.split(" ");
           for (j in words) {
             if (searchSounds[words[j]]) {
-              console.log("searchSound: " + words[j]);
               playNavSound(words[j]);
               return false;
             }
@@ -330,7 +393,6 @@ function tabNavigated(tabId, changeInfo, tab) {
   if (query > 0) {
     url = tab.url.substring(0, query);
   }
-  console.log(tab.url);
   var sound = urlSounds[url];
   if (sound) {
     playNavSound(url);
@@ -341,12 +403,12 @@ function tabNavigated(tabId, changeInfo, tab) {
 }
 
 var selectedTabId = -1;
-
-function tabSelectionChanged(tabId) {
+function tabSelectionChanged(activeInfo) {
+  // activeInfo: { tabId, windowId }
+  var tabId = activeInfo && activeInfo.tabId ? activeInfo.tabId : activeInfo;
   selectedTabId = tabId;
   if (eatEvent("tabSelectionChanged"))
     return false;
-
   var count = 7;
   chrome.tabs.get(tabId, function(tab) {
     var index = tab.index % count;
@@ -360,8 +422,6 @@ function tabCreated(tab) {
     return false;
   }
   eventsToEat++;  // tabNavigated or tabSelectionChanged
-  // TODO - unfortunately, we can't detect whether this tab will get focus, so
-  // we can't decide whether or not to eat a second event.
   return true;
 }
 
@@ -389,7 +449,6 @@ function windowCreated(window) {
 }
 
 var selectedWindowId = -1;
-
 function windowFocusChanged(windowId) {
   if (windowId == selectedWindowId) {
     return false;
@@ -411,21 +470,96 @@ function contentScriptHandler(request) {
       playSound(request.eventName);
     }
   }
-  console.log("got message: " + JSON.stringify(request));
 }
 
-
-//////////////////////////////////////////////////////
-
-// Listen for messages from content scripts.
-chrome.extension.onRequest.addListener(contentScriptHandler);
-
-// Load the sounds and register event listeners.
-for (var list in soundLists) {
-  for (var id in soundLists[list]) {
-    loadSound(soundLists[list][id], id);
+// Listen for messages from content scripts and options/offscreen
+chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
+  if (DEBUG_LOGGING) dlog("onMessage", message && message.type, message);
+  if (!message || !message.type) return;
+  if (message.type === "contentEvent") {
+    contentScriptHandler(message);
+  } else if (message.type === "optionsPlay") {
+    playSound(message.id, false);
+  } else if (message.type === "optionsStop") {
+    stopSound(message.id);
+  } else if (message.type === "offscreenReady") {
+    offscreenIsReady = true;
+    // Allow sounds immediately after offscreen is ready regardless of startup sound state
+    started = true;
+    // Flush any queued messages
+    var queue = pendingMessages.slice();
+    pendingMessages = [];
+    if (DEBUG_LOGGING) dlog("offscreenReady; flushing queued messages:", queue.length);
+    for (var i = 0; i < queue.length; i++) {
+      safeSendMessage(queue[i]);
+    }
+    // Re-init mappings and resume any active sounds
+    // Send fresh init without toggling readiness
+    var payload = { type: "init", baseUrl: base_url, mappings: {} };
+    for (var list in soundLists) {
+      for (var id in soundLists[list]) {
+        payload.mappings[id] = soundLists[list][id];
+      }
+    }
+    chrome.storage.local.get(null, function(items) {
+      for (var key in items) {
+        if (key.indexOf("customSound:") === 0) {
+          var soundId = key.substring("customSound:".length);
+          payload.mappings[soundId] = items[key];
+        }
+      }
+      if (DEBUG_LOGGING) dlog("sending init post-ready with mapping count:", Object.keys(payload.mappings).length);
+      safeSendMessage(payload);
+    });
+    for (var id in currentlyLooping) {
+      if (currentlyLooping[id]) {
+        (async function(replayId) {
+          var src = await resolveSoundSource(replayId);
+          if (src) {
+            if (DEBUG_LOGGING) dlog("resuming loop after offscreenReady:", replayId);
+            safeSendMessage({ type: "play", id: replayId, loop: true, src: src });
+          }
+        })(id);
+      }
+    }
+  } else if (message.type === "audioEnded") {
+    if (message.id === "startup") {
+      started = true;
+    }
+  } else if (message.type === "audioLoadError") {
+    if (message.id === "startup") {
+      started = true;
+    }
   }
-}
+});
+
+// Register event listeners
 for (var name in events) {
   soundEvent(events[name], name);
+  if (DEBUG_LOGGING) dlog("registered listener for", name);
 }
+
+// Initialize offscreen and play startup sound on worker start
+if (chrome.runtime && chrome.runtime.onInstalled) {
+  chrome.runtime.onInstalled.addListener(function(details) {
+    if (DEBUG_LOGGING) dlog("onInstalled", details && details.reason);
+  });
+}
+if (chrome.runtime && chrome.runtime.onStartup) {
+  chrome.runtime.onStartup.addListener(function() {
+    if (DEBUG_LOGGING) dlog("onStartup");
+  });
+}
+
+offscreenInit().then(function() {
+  // Kickstart: if startup is disabled, we still need to mark started to allow other sounds
+  storageGet("startup").then(function(val) {
+    if (val && val !== "enabled") {
+      started = true;
+      if (DEBUG_LOGGING) dlog("startup disabled in storage; marking started=true");
+    } else {
+      if (DEBUG_LOGGING) dlog("playing startup");
+      playSound("startup");
+    }
+  });
+});

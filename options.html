@@ -5,28 +5,113 @@
 body {
   font-family: tahoma;
   font-family: lucida grande;
+  margin: 0;
+  background: #f6f8fb;
+  color: #1f2937;
 }
+#page {
+  max-width: 760px;
+  margin: 32px auto;
+  padding: 0 16px;
+}
+h1 {
+  font-size: 20px;
+  margin: 0 0 6px 0;
+}
+.subtitle {
+  margin: 0 0 16px 0;
+  color: #6b7280;
+  font-size: 13px;
+}
+#sounds {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  padding: 12px 14px;
+}
+#sounds > div:first-child {
+  font-weight: 600;
+  padding-bottom: 10px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #e5e7eb;
+}
+#sounds > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+.row-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sound {
+  cursor: pointer;
+  color: #2563eb;
+}
+.sound:hover { color: #1d4ed8; }
+input[type="file"] { font-size: 12px; }
+/* Style the "Choose File" button */
+input[type="file"]::file-selector-button {
+  background: #2563eb;
+  color: #ffffff;
+  border: 1px solid #1d4ed8;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+input[type="file"]::file-selector-button:hover {
+  background: #1d4ed8;
+}
+button {
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+button:hover { background: #e5e7eb; }
 #attributions {
   margin-top: 20px;
   color: #666666;
   Xfont-size: 10px;
 }
-.sound {
-  cursor: pointer;
+.donate {
+  text-align: center;
+  color: #6b7280;
 }
+.donate a { color: inherit; text-decoration: none; }
 </style>
 <script src="options.js"></script>
 </head>
 <body>
 
-<div id="sounds"></div>
+<div id="page">
+  <h1>Chrome Sound Effects</h1>
+  <p class="subtitle">Enable/disable events and upload custom sounds.</p>
+
+  <div id="sounds"></div>
+
+	<p class="donate" style="">
+		<a href="https://www.paypal.com/donate?hosted_button_id=8U8XGZD9KHF5U" target="_blank">
+			support development by donating<br>
+			<input type="image" src="https://www.paypalobjects.com/en_US/i/btn/btn_donate_SM.gif" border="0" name="submit" title="PayPal - The safer, easier way to pay online!" alt="Donate with PayPal button" />
+		</a>
+	</p>
+  
 <div id="attributions">
-This extension is distributed by <br><b><a href=http://sivasuthan.com>Sivasuthan Dhayalan</a><b><br><br>
+
 Sounds from:
 <ul>
 <li><a href="http://www.freesound.org">www.freesound.org</a></li>
-<li><a href="http://www.free-samples-n-loops.com/loops.html">www.free-samples-n-loops.com/loops.html</a></li>
 </ul>
+</div>
+
 </div>
 </body>
 </html>
